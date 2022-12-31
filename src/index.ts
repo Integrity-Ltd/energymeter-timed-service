@@ -6,8 +6,9 @@ import sqlite3 from 'sqlite3';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import path from 'path';
-import targz from 'targz';
 import DBUtils from "../../energymeter-utils/src/utils/DBUtils";
+import AdmZip from "adm-zip";
+
 dotenv.config({ path: path.resolve(__dirname, `../${process.env.NODE_ENV ? process.env.NODE_ENV as string : ""}.env`) });
 
 if (process.env.NODE_ENV === "docker" && !fs.existsSync(path.join(process.env.WORKDIR as string, "config.sqlite"))) {
@@ -104,9 +105,9 @@ async function aggregateDataLastYear(IPAddess: string, timeZone: string, aggrega
     let firstDay = moment(momentLastYear).set("month", 0).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0).set("millisecond", 0);
     let lastDay = moment(firstDay).add(1, "year");
     const lastRecords: any[] = await getMonthlyMeasurements(firstDay, lastDay, IPAddess, timeZone);
-    lastRecords.forEach(async (lastRec: any) => {
+    for await (const lastRec of lastRecords) {
         await DBUtils.runQuery(aggregatedDb, "INSERT INTO Measurements (channel, measured_value, recorded_time) VALUES (?,?,?)", [lastRec.channel, lastRec.measured_value, lastRec.recorded_time]);
-    });
+    };
     cleanUpAggregatedFiles(IPAddess, momentLastYear);
 }
 
@@ -160,7 +161,7 @@ async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Mo
 }
 
 async function getMeasurementsFromDBs(fromDate: moment.Moment, toDate: moment.Moment, ip: string): Promise<any[]> {
-    let monthlyIterator = moment(fromDate).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0);
+    let monthlyIterator = moment(fromDate).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0).set("millisecond", 0);
     let result: any[] = [];
     while (monthlyIterator.isBefore(toDate) || monthlyIterator.isSame(toDate)) {
         const filePath = (process.env.WORKDIR as string);
@@ -193,7 +194,7 @@ async function archiveLastYear(dbFilesPath: string, archiveRelativeFilePath: str
         fs.mkdirSync(outPath, { recursive: true });
         console.log(moment().format(), `Directory '${outPath}' created.`);
     }
-    await compressFiles(year, dbFilesPath, path.join(outPath, `${year}.tgz`));
+    await compressFiles(year, dbFilesPath, path.join(outPath, `${year}.zip`));
 }
 
 function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.Moment) {
@@ -268,30 +269,29 @@ function getMeasurementsFromEnergyMeter(energymeter: any, channels: any) {
     });
 }
 
-function compressFiles(year: number, dbFilesPath: string, destination: string) {
-    const pattern = `${year}-\\d+-monthly.sqlite$`;
+function compressFiles(year: number, dbFilesPath: string, destination: string): Promise<any> {
     return new Promise<any>((resolve, reject) => {
-        targz.compress({
-            src: dbFilesPath,
-            dest: destination,
-            tar: {
-                ignore: function (name) {
-                    const mresult = name.match(pattern);
-                    return mresult == null || mresult.length == 0;
-                }
-            },
-            gz: {
-                level: 6,
-                memLevel: 6
-            }
-        }, function (err) {
+        const pattern = `${year}-\\d+-monthly.sqlite$`;
+        const zip = new AdmZip();
+
+        fs.readdir(dbFilesPath, function (err, files) {
             if (err) {
-                console.error(err);
-                return reject(err);
-            } else {
-                console.log(moment().format(), destination, "Archive created.");
-                return resolve(true);
+                console.error(moment().format(), 'Unable to scan directory: ' + err);
+                reject(err);
             }
+            files.forEach(function (file) {
+                const mresult = file.match(pattern);
+                if (mresult) {
+                    const fileName = path.join(dbFilesPath, file);
+                    if (fs.lstatSync(fileName).isFile()) {
+                        console.log(moment().format(), "added file to zip:", file);
+                        zip.addLocalFile(fileName);
+                    }
+                }
+            });
+            zip.writeZip(destination);
+            console.log(moment().format(), "Zip created:", destination)
+            resolve(true);
         });
     });
 }
