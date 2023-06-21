@@ -1,12 +1,12 @@
-# Homework4timer
+# Energymeter-Timed-Service 
 
 ## Install
 ```
 npm install
+npm run build
 ```
 
 ## Run
 ```
-npm run build
 node build/index.js
 ```
