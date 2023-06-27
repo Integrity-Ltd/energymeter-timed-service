@@ -119,11 +119,12 @@ function getMeasurementsDB(IPAddress: string, fileName: string, create: boolean)
 }
 
 function processMeasurements(db: Database, response: string, channels: String[]) {
+    let currentUnixTimeStamp = moment().unix();
     response.split('\n').forEach((line) => {
         let matches = line.match(/^channel_(\d{1,2}) : (.*)/);
         if (matches && channels.includes(matches[1])) {
             let measuredValue = parseFloat(matches[2]) * 1000;
-            db.exec(`INSERT INTO Measurements (channel, measured_value, recorded_time) VALUES (${matches[1]}, ${measuredValue}, ${moment().unix()})`);
+            db.exec(`INSERT INTO Measurements (channel, measured_value, recorded_time) VALUES (${matches[1]}, ${measuredValue}, ${currentUnixTimeStamp})`);
             console.log(moment().format(), matches[1], matches[2]);
         }
     });
@@ -143,37 +144,50 @@ function processAggregation(rows: unknown[]) {
         if (moment().month() == 0) {
             let momentLastYear = moment().add(-12, "months");
             let aggregatedDb: Database | undefined = getMeasurementsDB(row.ip_address, momentLastYear.format("YYYY") + '-yearly.sqlite', true);
-            if (!aggregatedDb) {
-                console.log(moment().format(), "Yearly aggregation database file not exists.");
+            if (aggregatedDb) {
+                aggregateDataLastYear(row.ip_address, aggregatedDb, momentLastYear).then(() => {
+                    aggregatedDb?.close();
+                });
             } else {
-                aggregateDataLastYear(row.ip_address, aggregatedDb, momentLastYear);
+                console.log(moment().format(), "Yearly aggregation database file not exists.");
             }
         }
     });
 }
 
 async function aggregateDataLastYear(IPAddess: string, aggregatedDb: Database, momentLastYear: moment.Moment) {
-    for (let idx = 0; idx < 12; idx++) {
-        const fileName = momentLastYear.format("YYYY-MM") + '-monthly.sqlite';
+    let monthlyIterator = moment(momentLastYear);
+    for (let idx = 0; idx <= 12; idx++) { //include next year first measure
+        const fileName = monthlyIterator.format("YYYY-MM") + '-monthly.sqlite';
         let db: Database | undefined = getMeasurementsDB(IPAddess, fileName, false);
         if (db) {
             const firstRecords = await runQuery(db, "SELECT min(id) as id, channel, measured_value, recorded_time FROM Measurements group by channel", []);
             const lastRecords = await runQuery(db, "SELECT max(id) as id, channel, measured_value, recorded_time FROM Measurements group by channel", []);
-
             firstRecords.forEach(async (firstRec: any) => {
                 await runQuery(aggregatedDb, "INSERT INTO Measurements (channel, measured_value, recorded_time) VALUES (?,?,?)", [firstRec.channel, firstRec.measured_value, firstRec.recorded_time]);
-            })
-            lastRecords.forEach(async (lastRec: any) => {
-                await runQuery(aggregatedDb, "INSERT INTO Measurements (channel, measured_value, recorded_time) VALUES (?,?,?)", [lastRec.channel, lastRec.measured_value, lastRec.recorded_time]);
-            })
-            db.close();
-            if ((process.env.DELETE_FILE_AFTER_AGGREGATION as string) == "true") {
-                const dbFilePath = getDBFilePath(IPAddess);
-                const dbFileName = dbFilePath + path.sep + fileName;
-                fs.rmSync(dbFileName);
+            });
+            if (idx < 12) {
+                lastRecords.forEach(async (lastRec: any) => {
+                    await runQuery(aggregatedDb, "INSERT INTO Measurements (channel, measured_value, recorded_time) VALUES (?,?,?)", [lastRec.channel, lastRec.measured_value, lastRec.recorded_time]);
+                });
             }
+            db.close();
         }
-        momentLastYear.add(1, "months");
+        monthlyIterator.add(1, "months");
+    }
+    cleanUpAggregatedFiles(IPAddess, momentLastYear);
+}
+
+function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.Moment) {
+    let monthlyIterator = moment(momentLastYear);
+    for (let idx = 0; idx < 12; idx++) {
+        const fileName = monthlyIterator.format("YYYY-MM") + '-monthly.sqlite';
+        if ((process.env.DELETE_FILE_AFTER_AGGREGATION as string) == "true") {
+            const dbFilePath = getDBFilePath(IPAddess);
+            const dbFileName = dbFilePath + path.sep + fileName;
+            fs.rmSync(dbFileName);
+        }
+        monthlyIterator.add(1, "months");
     }
 }
 
