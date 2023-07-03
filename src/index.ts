@@ -102,7 +102,7 @@ cron.schedule(process.env.HOURLY_CRONTAB as string, () => {
                         });
                     });
                 } catch (err) {
-                    console.log(moment().format(), err);
+                    console.error(moment().format(), err);
                 }
         });
     } catch (err) {
