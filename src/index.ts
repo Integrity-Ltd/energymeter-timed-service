@@ -6,78 +6,108 @@ import sqlite3 from 'sqlite3';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import path from 'path';
+import targz from 'targz';
 
 dotenv.config();
 
-cron.schedule(process.env.YEARLY_CRONTAB as string, () => {
-    console.log(moment().format(), "Monthly aggregation started");
+/*
+cron.schedule(process.env.YEARLY_ARCHIVE_CRONTAB as string, () => {
     let configDB = new Database(process.env.CONFIG_DB_FILE_NAME as string, sqlite3.OPEN_READONLY);
+    const momentLastYear = moment().add(-12, "months");
     configDB.all('SELECT * FROM energy_meter where enabled=1', (err, rows) => {
         if (err) {
             console.log(moment().format(), `Error at selection: ${err}`);
-        } else
-            try {
-                processAggregation(rows);
-            } catch (err) {
-                console.log(moment().format(), `Error at aggregation: ${err}`);
-            }
+        } else {
+            rows.forEach(async (row: any) => {
+                try {
+                    cleanUpAggregatedFiles(row.ip_address, momentLastYear);
+                } catch (err) {
+                    console.error(moment().format(), `Error at aggregation: ${err}`);
+                }
+            });
+        }
     });
+})
+*/
+
+cron.schedule(process.env.YEARLY_CRONTAB as string, () => {
+    if (moment().month() == 0)
+        try {
+            console.log(moment().format(), "Monthly aggregation started");
+            let configDB = new Database(process.env.CONFIG_DB_FILE_NAME as string, sqlite3.OPEN_READONLY);
+            configDB.all('SELECT * FROM energy_meter where enabled=1', (err, rows) => {
+                if (err) {
+                    console.log(moment().format(), `Error at selection: ${err}`);
+                } else
+                    try {
+                        processAggregation(rows);
+                    } catch (err) {
+                        console.log(moment().format(), `Error at aggregation: ${err}`);
+                    }
+            });
+        } catch (err) {
+            console.error(moment().format(), err);
+        }
 });
 
 cron.schedule(process.env.HOURLY_CRONTAB as string, () => {
-    let configDB = new Database(process.env.CONFIG_DB_FILE_NAME as string, sqlite3.OPEN_READONLY);
-    let response = '';
-    configDB.all('SELECT * FROM energy_meter where enabled=1', (err, rows) => {
-        if (err) {
-            console.log(moment().format(), `Error at selection: ${err}`);
-        } else
-            try {
-                rows.forEach(async (row: any) => {
-                    const client = new Net.Socket();
-                    client.connect({ port: row.port, host: row.ip_address }, () => {
-                        console.log(moment().format(), `TCP connection established with the server (${row.ip_address}).`);
-                        client.write('read all');
-                    });
-                    client.on('data', function (chunk) {
-                        response += chunk;
-                        client.end();
-                    });
+    try {
+        let configDB = new Database(process.env.CONFIG_DB_FILE_NAME as string, sqlite3.OPEN_READONLY);
+        let response = '';
+        configDB.all('SELECT * FROM energy_meter where enabled=1', (err, rows) => {
+            if (err) {
+                console.log(moment().format(), `Error at selection: ${err}`);
+            } else
+                try {
+                    rows.forEach(async (row: any) => {
+                        const client = new Net.Socket();
+                        client.connect({ port: row.port, host: row.ip_address }, () => {
+                            console.log(moment().format(), `TCP connection established with the server (${row.ip_address}).`);
+                            client.write('read all');
+                        });
+                        client.on('data', function (chunk) {
+                            response += chunk;
+                            client.end();
+                        });
 
-                    client.on('end', async function () {
-                        console.log(moment().format(), "Data received from the server.");
-                        let db: Database | undefined = getMeasurementsDB(row.ip_address, moment().format("YYYY-MM") + '-monthly.sqlite', true);
-                        if (!db) {
-                            console.log(moment().format(), "No database exists.");
-                            return;
-                        }
-                        try {
-                            console.log(moment().format(), "Try lock DB.");
-                            await runQuery(db, "BEGIN EXCLUSIVE", []);
-                            let channels = await getActiveChannels(configDB, row.id);
-                            processMeasurements(db, response, channels);
-                        } catch (err) {
-                            console.log(moment().format(), `DB access error: ${err}`);
-                        }
-                        finally {
-                            try {
-                                await runQuery(db, "COMMIT", []);
-                            } catch (err) {
-                                console.log(moment().format(), `Commit transaction error: ${err}`);
+                        client.on('end', async function () {
+                            console.log(moment().format(), "Data received from the server.");
+                            let db: Database | undefined = await getMeasurementsDB(row.ip_address, moment().format("YYYY-MM") + '-monthly.sqlite', true);
+                            if (!db) {
+                                console.error(moment().format(), "No database exists.");
+                                return;
                             }
-                            console.log(moment().format(), 'Closing DB connection...');
-                            db.close();
-                            console.log(moment().format(), 'DB connection closed.');
-                            console.log(moment().format(), 'Closing TCP connection...');
-                            client.destroy();
-                            console.log(moment().format(), 'TCP connection destroyed.');
-                        }
+                            try {
+                                console.log(moment().format(), "Try lock DB.");
+                                await runQuery(db, "BEGIN EXCLUSIVE", []);
+                                let channels = await getActiveChannels(configDB, row.id);
+                                processMeasurements(db, response, channels);
+                            } catch (err) {
+                                console.log(moment().format(), `DB access error: ${err}`);
+                            }
+                            finally {
+                                try {
+                                    await runQuery(db, "COMMIT", []);
+                                } catch (err) {
+                                    console.log(moment().format(), `Commit transaction error: ${err}`);
+                                }
+                                console.log(moment().format(), 'Closing DB connection...');
+                                db.close();
+                                console.log(moment().format(), 'DB connection closed.');
+                                console.log(moment().format(), 'Closing TCP connection...');
+                                client.destroy();
+                                console.log(moment().format(), 'TCP connection destroyed.');
+                            }
 
+                        });
                     });
-                });
-            } catch (err) {
-                console.log(moment().format(), err);
-            }
-    });
+                } catch (err) {
+                    console.log(moment().format(), err);
+                }
+        });
+    } catch (err) {
+        console.error(moment().format(), err);
+    }
 })
 
 function runQuery(dbase: Database, sql: string, params: Array<any>) {
@@ -97,7 +127,7 @@ function getDBFilePath(IPAddress: string): string {
     return dbFilePath;
 }
 
-function getMeasurementsDB(IPAddress: string, fileName: string, create: boolean): Database | undefined {
+async function getMeasurementsDB(IPAddress: string, fileName: string, create: boolean): Promise<Database | undefined> {
     let db: Database | undefined = undefined;
     const dbFilePath = getDBFilePath(IPAddress);
     if (!fs.existsSync(dbFilePath) && create) {
@@ -109,7 +139,7 @@ function getMeasurementsDB(IPAddress: string, fileName: string, create: boolean)
         if (create) {
             db = new Database(dbFileName, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE);
             console.log(moment().format(), `DB file '${dbFileName}' created.`);
-            db.exec(`CREATE TABLE "Measurements" ("id" INTEGER NOT NULL,"channel" INTEGER,"measured_value" REAL,"recorded_time" INTEGER, PRIMARY KEY("id" AUTOINCREMENT))`);
+            await runQuery(db, `CREATE TABLE "Measurements" ("id" INTEGER NOT NULL,"channel" INTEGER,"measured_value" REAL,"recorded_time" INTEGER, PRIMARY KEY("id" AUTOINCREMENT))`, []);
         }
     } else {
         console.log(moment().format(), `DB file '${dbFileName}' opened.`);
@@ -141,16 +171,14 @@ async function getActiveChannels(configDB: Database, energyMeterId: number): Pro
 
 function processAggregation(rows: unknown[]) {
     rows.forEach(async (row: any) => {
-        if (moment().month() == 0) {
-            let momentLastYear = moment().add(-12, "months");
-            let aggregatedDb: Database | undefined = getMeasurementsDB(row.ip_address, momentLastYear.format("YYYY") + '-yearly.sqlite', true);
-            if (aggregatedDb) {
-                aggregateDataLastYear(row.ip_address, aggregatedDb, momentLastYear).then(() => {
-                    aggregatedDb?.close();
-                });
-            } else {
-                console.log(moment().format(), "Yearly aggregation database file not exists.");
-            }
+        let momentLastYear = moment().add(-12, "months");
+        let aggregatedDb: Database | undefined = await getMeasurementsDB(row.ip_address, momentLastYear.format("YYYY") + '-yearly.sqlite', true);
+        if (aggregatedDb) {
+            aggregateDataLastYear(row.ip_address, aggregatedDb, momentLastYear).then(() => {
+                aggregatedDb?.close();
+            });
+        } else {
+            console.log(moment().format(), "Yearly aggregation database file not exists.");
         }
     });
 }
@@ -159,7 +187,7 @@ async function aggregateDataLastYear(IPAddess: string, aggregatedDb: Database, m
     let monthlyIterator = moment(momentLastYear);
     for (let idx = 0; idx <= 12; idx++) { //include next year first measure
         const fileName = monthlyIterator.format("YYYY-MM") + '-monthly.sqlite';
-        let db: Database | undefined = getMeasurementsDB(IPAddess, fileName, false);
+        let db: Database | undefined = await getMeasurementsDB(IPAddess, fileName, false);
         if (db) {
             const firstRecords = await runQuery(db, "SELECT min(id) as id, channel, measured_value, recorded_time FROM Measurements group by channel", []);
             const lastRecords = await runQuery(db, "SELECT max(id) as id, channel, measured_value, recorded_time FROM Measurements group by channel", []);
@@ -178,16 +206,43 @@ async function aggregateDataLastYear(IPAddess: string, aggregatedDb: Database, m
     cleanUpAggregatedFiles(IPAddess, momentLastYear);
 }
 
+function archiveLastYear(dbFilePath: string, archiveRelativeFilePath: string, lastYear: moment.Moment, IPAddess: string) {
+    const year = lastYear.year();
+    const pattern = `${year}-\\d+-monthly.sqlite$`;
+    targz.compress({
+        src: dbFilePath,
+        dest: dbFilePath + path.sep + archiveRelativeFilePath + path.sep + `${year}.tgz`,
+        tar: {
+            ignore: function (name) {
+                const mresult = name.match(pattern);
+                return mresult == null || mresult.length == 0;
+            }
+        },
+        gz: {
+            level: 6,
+            memLevel: 6
+        }
+    }, function (err) {
+        if (err) {
+            console.error(err);
+        } else {
+            console.log(moment().format(), "Archive created.");
+        }
+    });
+}
+
 function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.Moment) {
-    let monthlyIterator = moment(momentLastYear);
-    for (let idx = 0; idx < 12; idx++) {
-        const fileName = monthlyIterator.format("YYYY-MM") + '-monthly.sqlite';
-        if ((process.env.DELETE_FILE_AFTER_AGGREGATION as string) == "true") {
-            const dbFilePath = getDBFilePath(IPAddess);
+    const dbFilePath = getDBFilePath(IPAddess);
+    const archiveRelativeFilePath = process.env.ARCHIVE_FILE_PATH as string;
+    archiveLastYear(dbFilePath, archiveRelativeFilePath, momentLastYear, IPAddess);
+    if ((process.env.DELETE_FILE_AFTER_AGGREGATION as string) == "true") {
+        let monthlyIterator = moment(momentLastYear);
+        for (let idx = 0; idx < 12; idx++) {
+            const fileName = monthlyIterator.format("YYYY-MM") + '-monthly.sqlite';
             const dbFileName = dbFilePath + path.sep + fileName;
             fs.rmSync(dbFileName);
+            monthlyIterator.add(1, "months");
         }
-        monthlyIterator.add(1, "months");
     }
 }
 
