@@ -53,16 +53,16 @@ cron.schedule(process.env.YEARLY_CRONTAB as string, () => {
 cron.schedule(process.env.HOURLY_CRONTAB as string, () => {
     try {
         let configDB = new Database(process.env.CONFIG_DB_FILE_NAME as string, sqlite3.OPEN_READONLY);
-        let response = '';
         configDB.all('SELECT * FROM energy_meter where enabled=1', (err, rows) => {
             if (err) {
                 console.log(moment().format(), `Error at selection: ${err}`);
             } else
                 try {
                     rows.forEach(async (row: any) => {
+                        let response = '';
                         const client = new Net.Socket();
                         client.connect({ port: row.port, host: row.ip_address }, () => {
-                            console.log(moment().format(), `TCP connection established with the server (${row.ip_address}).`);
+                            console.log(moment().format(), row.ip_address, `TCP connection established with the server.`);
                             client.write('read all');
                         });
                         client.on('data', function (chunk) {
@@ -71,32 +71,32 @@ cron.schedule(process.env.HOURLY_CRONTAB as string, () => {
                         });
 
                         client.on('end', async function () {
-                            console.log(moment().format(), "Data received from the server.");
+                            console.log(moment().format(), row.ip_address, "Data received from the server.");
                             let db: Database | undefined = await getMeasurementsDB(row.ip_address, moment().format("YYYY-MM") + '-monthly.sqlite', true);
                             if (!db) {
-                                console.error(moment().format(), "No database exists.");
+                                console.error(moment().format(), row.ip_address, "No database exists.");
                                 return;
                             }
                             try {
-                                console.log(moment().format(), "Try lock DB.");
+                                console.log(moment().format(), row.ip_address, "Try lock DB.");
                                 await runQuery(db, "BEGIN EXCLUSIVE", []);
                                 let channels = await getActiveChannels(configDB, row.id);
                                 processMeasurements(db, response, channels);
                             } catch (err) {
-                                console.log(moment().format(), `DB access error: ${err}`);
+                                console.log(moment().format(), row.ip_address, `DB access error: ${err}`);
                             }
                             finally {
                                 try {
                                     await runQuery(db, "COMMIT", []);
                                 } catch (err) {
-                                    console.log(moment().format(), `Commit transaction error: ${err}`);
+                                    console.log(moment().format(), row.ip_address, `Commit transaction error: ${err}`);
                                 }
-                                console.log(moment().format(), 'Closing DB connection...');
+                                console.log(moment().format(), row.ip_address, 'Closing DB connection...');
                                 db.close();
-                                console.log(moment().format(), 'DB connection closed.');
-                                console.log(moment().format(), 'Closing TCP connection...');
+                                console.log(moment().format(), row.ip_address, 'DB connection closed.');
+                                console.log(moment().format(), row.ip_address, 'Closing TCP connection...');
                                 client.destroy();
-                                console.log(moment().format(), 'TCP connection destroyed.');
+                                console.log(moment().format(), row.ip_address, 'TCP connection destroyed.');
                             }
 
                         });
