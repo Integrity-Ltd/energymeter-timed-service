@@ -61,9 +61,16 @@ cron.schedule(process.env.HOURLY_CRONTAB as string, () => {
                     rows.forEach(async (row: any) => {
                         let response = '';
                         const client = new Net.Socket();
-                        client.connect({ port: row.port, host: row.ip_address }, () => {
-                            console.log(moment().format(), row.ip_address, `TCP connection established with the server.`);
-                            client.write('read all');
+                        try {
+                            client.connect({ port: row.port, host: row.ip_address }, () => {
+                                console.log(moment().format(), row.ip_address, `TCP connection established with the server.`);
+                                client.write('read all');
+                            });
+                        } catch (err) {
+                            console.error(moment().format(), err);
+                        }
+                        client.on('error', function (err) {
+                            console.error(moment().format(), err);
                         });
                         client.on('data', function (chunk) {
                             response += chunk;
