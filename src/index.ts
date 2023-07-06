@@ -58,55 +58,9 @@ cron.schedule(process.env.HOURLY_CRONTAB as string, () => {
                 console.log(moment().format(), `Error at selection: ${err}`);
             } else
                 try {
-                    rows.forEach(async (row: any) => {
-                        let response = '';
-                        const client = new Net.Socket();
-                        try {
-                            client.connect({ port: row.port, host: row.ip_address }, () => {
-                                console.log(moment().format(), row.ip_address, `TCP connection established with the server.`);
-                                client.write('read all');
-                            });
-                        } catch (err) {
-                            console.error(moment().format(), err);
-                        }
-                        client.on('error', function (err) {
-                            console.error(moment().format(), err);
-                        });
-                        client.on('data', function (chunk) {
-                            response += chunk;
-                            client.end();
-                        });
-
-                        client.on('end', async function () {
-                            console.log(moment().format(), row.ip_address, "Data received from the server.");
-                            let db: Database | undefined = await getMeasurementsDB(row.ip_address, moment().format("YYYY-MM") + '-monthly.sqlite', true);
-                            if (!db) {
-                                console.error(moment().format(), row.ip_address, "No database exists.");
-                                return;
-                            }
-                            try {
-                                console.log(moment().format(), row.ip_address, "Try lock DB.");
-                                await runQuery(db, "BEGIN EXCLUSIVE", []);
-                                let channels = await getActiveChannels(configDB, row.id);
-                                processMeasurements(db, response, channels);
-                            } catch (err) {
-                                console.log(moment().format(), row.ip_address, `DB access error: ${err}`);
-                            }
-                            finally {
-                                try {
-                                    await runQuery(db, "COMMIT", []);
-                                } catch (err) {
-                                    console.log(moment().format(), row.ip_address, `Commit transaction error: ${err}`);
-                                }
-                                console.log(moment().format(), row.ip_address, 'Closing DB connection...');
-                                db.close();
-                                console.log(moment().format(), row.ip_address, 'DB connection closed.');
-                                console.log(moment().format(), row.ip_address, 'Closing TCP connection...');
-                                client.destroy();
-                                console.log(moment().format(), row.ip_address, 'TCP connection destroyed.');
-                            }
-
-                        });
+                    rows.forEach(async (energymeter: any) => {
+                        let channels = await getActiveChannels(configDB, energymeter.id);
+                        getMeasurementsFromEnergyMeter(energymeter, channels);
                     });
                 } catch (err) {
                     console.error(moment().format(), err);
@@ -178,39 +132,122 @@ async function getActiveChannels(configDB: Database, energyMeterId: number): Pro
 
 function processAggregation(rows: unknown[]) {
     rows.forEach(async (row: any) => {
-        let momentLastYear = moment().add(-12, "months");
+        let momentLastYear = moment().add(-1, "year");
         let aggregatedDb: Database | undefined = await getMeasurementsDB(row.ip_address, momentLastYear.format("YYYY") + '-yearly.sqlite', true);
         if (aggregatedDb) {
             aggregateDataLastYear(row.ip_address, aggregatedDb, momentLastYear).then(() => {
                 aggregatedDb?.close();
+            }).catch((err) => {
+                console.error(moment().format(), row.ip_address, err);
+                aggregatedDb?.close();
             });
         } else {
-            console.log(moment().format(), "Yearly aggregation database file not exists.");
+            console.log(moment().format(), row.ip_address, "Yearly aggregation database file not exists.");
         }
     });
 }
 
 async function aggregateDataLastYear(IPAddess: string, aggregatedDb: Database, momentLastYear: moment.Moment) {
-    let monthlyIterator = moment(momentLastYear);
-    for (let idx = 0; idx <= 12; idx++) { //include next year first measure
-        const fileName = monthlyIterator.format("YYYY-MM") + '-monthly.sqlite';
-        let db: Database | undefined = await getMeasurementsDB(IPAddess, fileName, false);
-        if (db) {
-            const firstRecords = await runQuery(db, "SELECT min(id) as id, channel, measured_value, recorded_time FROM Measurements group by channel", []);
-            const lastRecords = await runQuery(db, "SELECT max(id) as id, channel, measured_value, recorded_time FROM Measurements group by channel", []);
-            firstRecords.forEach(async (firstRec: any) => {
-                await runQuery(aggregatedDb, "INSERT INTO Measurements (channel, measured_value, recorded_time) VALUES (?,?,?)", [firstRec.channel, firstRec.measured_value, firstRec.recorded_time]);
-            });
-            if (idx < 12) {
-                lastRecords.forEach(async (lastRec: any) => {
-                    await runQuery(aggregatedDb, "INSERT INTO Measurements (channel, measured_value, recorded_time) VALUES (?,?,?)", [lastRec.channel, lastRec.measured_value, lastRec.recorded_time]);
-                });
+    let firstDay = moment(momentLastYear).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0).set("millisecond", 0);
+    let lastDay = moment(firstDay).add(1, "year");
+    const lastRecords: any[] = await getMonthlyMeasurements(firstDay, lastDay, IPAddess);
+    lastRecords.forEach(async (lastRec: any) => {
+        await runQuery(aggregatedDb, "INSERT INTO Measurements (channel, measured_value, recorded_time) VALUES (?,?,?)", [lastRec.channel, lastRec.measured_value, lastRec.recorded_time]);
+    });
+    cleanUpAggregatedFiles(IPAddess, momentLastYear);
+}
+
+async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Moment, ip: string): Promise<any[]> {
+    let measurements = await getMeasurementsFromDBs(fromDate, toDate, ip);
+    let result: any[] = [];
+    let prevElement: any = {};
+    let lastElement: any = {};
+    let isMonthlyEnabled = false;
+    measurements.forEach((element: any, idx: number) => {
+        if (prevElement[element.channel] == undefined) {
+            prevElement[element.channel] = { recorded_time: element.recorded_time, measured_value: element.measured_value, channel: element.channel, diff: 0 };
+        } else {
+            const roundedPrevMonth = moment.unix(prevElement[element.channel].recorded_time).utc().set("date", 1).set("hour", 0).set("minute", 0).set("second", 0);
+            const roundedMonth = moment.unix(element.recorded_time).utc().set("date", 1).set("hour", 0).set("minute", 0).set("second", 0);
+            const diffMonths = roundedMonth.diff(roundedPrevMonth, "months");
+            isMonthlyEnabled = diffMonths >= 1;
+
+            if (isMonthlyEnabled) {
+                prevElement[element.channel] = {
+                    recorded_time: element.recorded_time,
+                    measured_value: element.measured_value,
+                    channel: element.channel,
+                };
+                result.push({ ...prevElement[element.channel] });
             }
-            db.close();
+
+            lastElement[element.channel] = { recorded_time: element.recorded_time, measured_value: element.measured_value, channel: element.channel };
+        }
+    });
+    if (!isMonthlyEnabled) {
+        Object.keys(lastElement).forEach((key) => {
+            try {
+                const diff = lastElement[key].measured_value - prevElement[lastElement[key].channel].measured_value;
+                prevElement[lastElement[key].channel] = {
+                    recorded_time: lastElement[key].recorded_time,
+                    measured_value: lastElement[key].measured_value,
+                    channel: lastElement[key].channel
+                };
+                if (diff != 0) {
+                    result.push({ ...prevElement[lastElement[key].channel] });
+                }
+            } catch (err) {
+                console.error(moment().format(), err);
+            }
+        });
+    }
+    return result;
+}
+async function getMeasurementsFromDBs(fromDate: moment.Moment, toDate: moment.Moment, ip: string): Promise<any[]> {
+    let monthlyIterator = moment(fromDate);
+    let result: any[] = [];
+    while (monthlyIterator.isBefore(toDate)) {
+        const filePath = (process.env.WORKDIR as string);
+        const dbFile = filePath + (filePath.endsWith(path.sep) ? "" : path.sep) + ip + path.sep + monthlyIterator.format("YYYY-MM") + "-monthly.sqlite";
+        if (fs.existsSync(dbFile)) {
+            const db = new Database(dbFile);
+            try {
+                const fromSec = fromDate.unix();
+                const toSec = toDate.unix();
+                let measurements = await runQuery(db, "select * from measurements where recorded_time between ? and ? order by recorded_time, channel", [fromSec, toSec]);
+                measurements.forEach((element: any) => {
+                    result.push(element);
+                })
+            } catch (err) {
+                console.error(moment().format(), err);
+            } finally {
+                db.close();
+            }
         }
         monthlyIterator.add(1, "months");
     }
-    cleanUpAggregatedFiles(IPAddess, momentLastYear);
+
+    if (result.length > 0) {
+        const lastRecordedTime = result[result.length - 1].recorded_time;
+        let nextHour = moment.unix(lastRecordedTime);
+        nextHour.add(1, "hour");
+        const filePath = (process.env.WORKDIR as string);
+        const dbFile = filePath + (filePath.endsWith(path.sep) ? "" : path.sep) + ip + path.sep + nextHour.format("YYYY-MM") + "-monthly.sqlite";
+        if (fs.existsSync(dbFile)) {
+            const db = new Database(dbFile);
+            try {
+                const firstRecords = await runQuery(db, "SELECT min(id) as id, channel, measured_value, recorded_time FROM measurements where recorded_time > ? group by channel", [lastRecordedTime]);
+                firstRecords.forEach((element: any) => {
+                    result.push(element);
+                })
+            } catch (err) {
+                console.error(moment().format(), err);
+            } finally {
+                db.close();
+            }
+        }
+    }
+    return result;
 }
 
 function archiveLastYear(dbFilePath: string, archiveRelativeFilePath: string, lastYear: moment.Moment, IPAddess: string) {
@@ -251,6 +288,56 @@ function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.Moment)
             monthlyIterator.add(1, "months");
         }
     }
+}
+
+function getMeasurementsFromEnergyMeter(energymeter: any, channels: any) {
+    let response = '';
+    const client = new Net.Socket();
+    try {
+        client.connect({ port: energymeter.port, host: energymeter.ip_address }, () => {
+            console.log(moment().format(), energymeter.ip_address, `TCP connection established with the server.`);
+            client.write('read all');
+        });
+    } catch (err) {
+        console.error(moment().format(), err);
+    }
+    client.on('error', function (err) {
+        console.error(moment().format(), err);
+    });
+    client.on('data', function (chunk) {
+        response += chunk;
+        client.end();
+    });
+
+    client.on('end', async function () {
+        console.log(moment().format(), energymeter.ip_address, "Data received from the server.");
+        let db: Database | undefined = await getMeasurementsDB(energymeter.ip_address, moment().format("YYYY-MM") + '-monthly.sqlite', true);
+        if (!db) {
+            console.error(moment().format(), energymeter.ip_address, "No database exists.");
+            return;
+        }
+        try {
+            console.log(moment().format(), energymeter.ip_address, "Try lock DB.");
+            await runQuery(db, "BEGIN EXCLUSIVE", []);
+            processMeasurements(db, response, channels);
+        } catch (err) {
+            console.log(moment().format(), energymeter.ip_address, `DB access error: ${err}`);
+        }
+        finally {
+            try {
+                await runQuery(db, "COMMIT", []);
+            } catch (err) {
+                console.log(moment().format(), energymeter.ip_address, `Commit transaction error: ${err}`);
+            }
+            console.log(moment().format(), energymeter.ip_address, 'Closing DB connection...');
+            db.close();
+            console.log(moment().format(), energymeter.ip_address, 'DB connection closed.');
+            console.log(moment().format(), energymeter.ip_address, 'Closing TCP connection...');
+            client.destroy();
+            console.log(moment().format(), energymeter.ip_address, 'TCP connection destroyed.');
+        }
+
+    });
 }
 
 console.log(moment().format(), 'Server started.');
