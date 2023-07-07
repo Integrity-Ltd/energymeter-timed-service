@@ -7,8 +7,8 @@ import fs from 'fs';
 import dotenv from 'dotenv';
 import path from 'path';
 import targz from 'targz';
-
-dotenv.config();
+import DBUtils from "../../energymeter-utils/src/utils/DBUtils";
+dotenv.config({ path: path.resolve(__dirname, '../service.env') });
 
 /*
 cron.schedule(process.env.YEARLY_ARCHIVE_CRONTAB as string, () => {
@@ -71,58 +71,8 @@ cron.schedule(process.env.HOURLY_CRONTAB as string, () => {
     }
 })
 
-function runQuery(dbase: Database, sql: string, params: Array<any>) {
-    return new Promise<any>((resolve, reject) => {
-        return dbase.all(sql, params, (err: any, res: any) => {
-            if (err) {
-                console.error("Run query Error: ", err.message);
-                return reject(err.message);
-            }
-            return resolve(res);
-        });
-    });
-}
-
-function getDBFilePath(IPAddress: string): string {
-    const dbFilePath = (process.env.WORKDIR as string) + ((process.env.WORKDIR as string).endsWith(path.sep) ? '' : path.sep) + IPAddress;
-    return dbFilePath;
-}
-
-async function getMeasurementsDB(IPAddress: string, fileName: string, create: boolean): Promise<Database | undefined> {
-    let db: Database | undefined = undefined;
-    const dbFilePath = getDBFilePath(IPAddress);
-    if (!fs.existsSync(dbFilePath) && create) {
-        fs.mkdirSync(dbFilePath, { recursive: true });
-        console.log(moment().format(), `Directory '${dbFilePath}' created.`);
-    }
-    const dbFileName = dbFilePath + path.sep + fileName;
-    if (!fs.existsSync(dbFileName)) {
-        if (create) {
-            db = new Database(dbFileName, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE);
-            console.log(moment().format(), `DB file '${dbFileName}' created.`);
-            await runQuery(db, `CREATE TABLE "Measurements" ("id" INTEGER NOT NULL,"channel" INTEGER,"measured_value" REAL,"recorded_time" INTEGER, PRIMARY KEY("id" AUTOINCREMENT))`, []);
-        }
-    } else {
-        console.log(moment().format(), `DB file '${dbFileName}' opened.`);
-        db = new Database(dbFileName, sqlite3.OPEN_READWRITE);
-    }
-    return db;
-}
-
-function processMeasurements(db: Database, response: string, channels: String[]) {
-    let currentUnixTimeStamp = moment().unix();
-    response.split('\n').forEach((line) => {
-        let matches = line.match(/^channel_(\d{1,2}) : (.*)/);
-        if (matches && channels.includes(matches[1])) {
-            let measuredValue = parseFloat(matches[2]) * 1000;
-            db.exec(`INSERT INTO Measurements (channel, measured_value, recorded_time) VALUES (${matches[1]}, ${measuredValue}, ${currentUnixTimeStamp})`);
-            console.log(moment().format(), matches[1], matches[2]);
-        }
-    });
-}
-
 async function getActiveChannels(configDB: Database, energyMeterId: number): Promise<Array<String>> {
-    let channelsResult: any[] = await runQuery(configDB, `SELECT channel FROM channels WHERE energy_meter_id = ? and enabled=1`, [energyMeterId]);
+    let channelsResult: any[] = await DBUtils.runQuery(configDB, `SELECT channel FROM channels WHERE energy_meter_id = ? and enabled=1`, [energyMeterId]);
     let channels: Array<String> = new Array<String>();
     channelsResult.map((ch) => {
         channels.push(ch.channel.toString());
@@ -133,7 +83,7 @@ async function getActiveChannels(configDB: Database, energyMeterId: number): Pro
 function processAggregation(rows: unknown[]) {
     rows.forEach(async (row: any) => {
         let momentLastYear = moment().add(-1, "year");
-        let aggregatedDb: Database | undefined = await getMeasurementsDB(row.ip_address, momentLastYear.format("YYYY") + '-yearly.sqlite', true);
+        let aggregatedDb: Database | undefined = await DBUtils.getMeasurementsDB(row.ip_address, momentLastYear.format("YYYY") + '-yearly.sqlite', true);
         if (aggregatedDb) {
             aggregateDataLastYear(row.ip_address, aggregatedDb, momentLastYear).then(() => {
                 aggregatedDb?.close();
@@ -152,7 +102,7 @@ async function aggregateDataLastYear(IPAddess: string, aggregatedDb: Database, m
     let lastDay = moment(firstDay).add(1, "year");
     const lastRecords: any[] = await getMonthlyMeasurements(firstDay, lastDay, IPAddess);
     lastRecords.forEach(async (lastRec: any) => {
-        await runQuery(aggregatedDb, "INSERT INTO Measurements (channel, measured_value, recorded_time) VALUES (?,?,?)", [lastRec.channel, lastRec.measured_value, lastRec.recorded_time]);
+        await DBUtils.runQuery(aggregatedDb, "INSERT INTO Measurements (channel, measured_value, recorded_time) VALUES (?,?,?)", [lastRec.channel, lastRec.measured_value, lastRec.recorded_time]);
     });
     cleanUpAggregatedFiles(IPAddess, momentLastYear);
 }
@@ -214,7 +164,7 @@ async function getMeasurementsFromDBs(fromDate: moment.Moment, toDate: moment.Mo
             try {
                 const fromSec = fromDate.unix();
                 const toSec = toDate.unix();
-                let measurements = await runQuery(db, "select * from measurements where recorded_time between ? and ? order by recorded_time, channel", [fromSec, toSec]);
+                let measurements = await DBUtils.runQuery(db, "select * from measurements where recorded_time between ? and ? order by recorded_time, channel", [fromSec, toSec]);
                 measurements.forEach((element: any) => {
                     result.push(element);
                 })
@@ -236,7 +186,7 @@ async function getMeasurementsFromDBs(fromDate: moment.Moment, toDate: moment.Mo
         if (fs.existsSync(dbFile)) {
             const db = new Database(dbFile);
             try {
-                const firstRecords = await runQuery(db, "SELECT min(id) as id, channel, measured_value, recorded_time FROM measurements where recorded_time > ? group by channel", [lastRecordedTime]);
+                const firstRecords = await DBUtils.runQuery(db, "SELECT min(id) as id, channel, measured_value, recorded_time FROM measurements where recorded_time > ? group by channel", [lastRecordedTime]);
                 firstRecords.forEach((element: any) => {
                     result.push(element);
                 })
@@ -281,7 +231,7 @@ function archiveLastYear(dbFilesPath: string, archiveRelativeFilePath: string, l
 }
 
 function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.Moment) {
-    const dbFilePath = getDBFilePath(IPAddess);
+    const dbFilePath = DBUtils.getDBFilePath(IPAddess);
     const archiveRelativeFilePath = process.env.ARCHIVE_FILE_PATH as string;
     archiveLastYear(dbFilePath, archiveRelativeFilePath, momentLastYear);
     if ((process.env.DELETE_FILE_AFTER_AGGREGATION as string) == "true") {
@@ -316,21 +266,21 @@ function getMeasurementsFromEnergyMeter(energymeter: any, channels: any) {
 
     client.on('end', async function () {
         console.log(moment().format(), energymeter.ip_address, "Data received from the server.");
-        let db: Database | undefined = await getMeasurementsDB(energymeter.ip_address, moment().format("YYYY-MM") + '-monthly.sqlite', true);
+        let db: Database | undefined = await DBUtils.getMeasurementsDB(energymeter.ip_address, moment().format("YYYY-MM") + '-monthly.sqlite', true);
         if (!db) {
             console.error(moment().format(), energymeter.ip_address, "No database exists.");
             return;
         }
         try {
             console.log(moment().format(), energymeter.ip_address, "Try lock DB.");
-            await runQuery(db, "BEGIN EXCLUSIVE", []);
-            processMeasurements(db, response, channels);
+            await DBUtils.runQuery(db, "BEGIN EXCLUSIVE", []);
+            DBUtils.processMeasurements(db, response, channels);
         } catch (err) {
             console.log(moment().format(), energymeter.ip_address, `DB access error: ${err}`);
         }
         finally {
             try {
-                await runQuery(db, "COMMIT", []);
+                await DBUtils.runQuery(db, "COMMIT", []);
             } catch (err) {
                 console.log(moment().format(), energymeter.ip_address, `Commit transaction error: ${err}`);
             }
