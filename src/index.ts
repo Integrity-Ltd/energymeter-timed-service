@@ -250,12 +250,17 @@ async function getMeasurementsFromDBs(fromDate: moment.Moment, toDate: moment.Mo
     return result;
 }
 
-function archiveLastYear(dbFilePath: string, archiveRelativeFilePath: string, lastYear: moment.Moment, IPAddess: string) {
+function archiveLastYear(dbFilesPath: string, archiveRelativeFilePath: string, lastYear: moment.Moment) {
     const year = lastYear.year();
     const pattern = `${year}-\\d+-monthly.sqlite$`;
+    const outPath = dbFilesPath + path.sep + archiveRelativeFilePath;
+    if (!fs.existsSync(outPath)) {
+        fs.mkdirSync(outPath, { recursive: true });
+        console.log(moment().format(), `Directory '${outPath}' created.`);
+    }
     targz.compress({
-        src: dbFilePath,
-        dest: dbFilePath + path.sep + archiveRelativeFilePath + path.sep + `${year}.tgz`,
+        src: dbFilesPath,
+        dest: outPath + path.sep + `${year}.tgz`,
         tar: {
             ignore: function (name) {
                 const mresult = name.match(pattern);
@@ -278,7 +283,7 @@ function archiveLastYear(dbFilePath: string, archiveRelativeFilePath: string, la
 function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.Moment) {
     const dbFilePath = getDBFilePath(IPAddess);
     const archiveRelativeFilePath = process.env.ARCHIVE_FILE_PATH as string;
-    archiveLastYear(dbFilePath, archiveRelativeFilePath, momentLastYear, IPAddess);
+    archiveLastYear(dbFilePath, archiveRelativeFilePath, momentLastYear);
     if ((process.env.DELETE_FILE_AFTER_AGGREGATION as string) == "true") {
         let monthlyIterator = moment(momentLastYear);
         for (let idx = 0; idx < 12; idx++) {
