@@ -8,7 +8,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import targz from 'targz';
 import DBUtils from "../../energymeter-utils/src/utils/DBUtils";
-dotenv.config({ path: path.resolve(__dirname, '../service.env') });
+dotenv.config({ path: path.resolve(__dirname, `../${process.env.NODE_ENV ? process.env.NODE_ENV as string : ""}.env`) });
 
 /*
 cron.schedule(process.env.YEARLY_ARCHIVE_CRONTAB as string, () => {
