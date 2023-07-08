@@ -10,6 +10,9 @@ import targz from 'targz';
 import DBUtils from "../../energymeter-utils/src/utils/DBUtils";
 dotenv.config({ path: path.resolve(__dirname, `../${process.env.NODE_ENV ? process.env.NODE_ENV as string : ""}.env`) });
 
+if (process.env.NODE_ENV === "docker" && !fs.existsSync(process.env.WORKDIR + path.sep + "config.sqlite")) {
+    fs.copyFileSync(path.resolve(__dirname, "../config.sqlite"), process.env.WORKDIR + path.sep + "config.sqlite");
+}
 /*
 cron.schedule(process.env.YEARLY_ARCHIVE_CRONTAB as string, () => {
     let configDB = new Database(process.env.CONFIG_DB_FILE_NAME as string, sqlite3.OPEN_READONLY);
