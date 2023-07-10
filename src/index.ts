@@ -303,7 +303,7 @@ function compressFiles(year: number, dbFilesPath: string, destination: string) {
                 console.error(err);
                 return reject(err);
             } else {
-                console.log(moment().format(), "Archive created.");
+                console.log(moment().format(), destination, "Archive created.");
                 return resolve(true);
             }
         });
