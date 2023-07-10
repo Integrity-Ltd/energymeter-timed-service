@@ -119,6 +119,7 @@ async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Mo
     measurements.forEach((element: any, idx: number) => {
         if (prevElement[element.channel] == undefined) {
             prevElement[element.channel] = { recorded_time: element.recorded_time, measured_value: element.measured_value, channel: element.channel, diff: 0 };
+            result.push({ ...prevElement[element.channel] });
         } else {
             const roundedPrevMonth = moment.unix(prevElement[element.channel].recorded_time).utc().set("date", 1).set("hour", 0).set("minute", 0).set("second", 0);
             const roundedMonth = moment.unix(element.recorded_time).utc().set("date", 1).set("hour", 0).set("minute", 0).set("second", 0);
