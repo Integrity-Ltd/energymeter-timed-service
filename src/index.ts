@@ -10,8 +10,8 @@ import targz from 'targz';
 import DBUtils from "../../energymeter-utils/src/utils/DBUtils";
 dotenv.config({ path: path.resolve(__dirname, `../${process.env.NODE_ENV ? process.env.NODE_ENV as string : ""}.env`) });
 
-if (process.env.NODE_ENV === "docker" && !fs.existsSync(process.env.WORKDIR + path.sep + "config.sqlite")) {
-    fs.copyFileSync(path.resolve(__dirname, "../config.sqlite"), process.env.WORKDIR + path.sep + "config.sqlite");
+if (process.env.NODE_ENV === "docker" && !fs.existsSync(path.join(process.env.WORKDIR as string, "config.sqlite"))) {
+    fs.copyFileSync(path.resolve(__dirname, "../config.sqlite"), path.join(process.env.WORKDIR as string, "config.sqlite"));
 }
 /*
 cron.schedule(process.env.YEARLY_ARCHIVE_CRONTAB as string, () => {
@@ -160,9 +160,9 @@ async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Mo
 async function getMeasurementsFromDBs(fromDate: moment.Moment, toDate: moment.Moment, ip: string): Promise<any[]> {
     let monthlyIterator = moment(fromDate);
     let result: any[] = [];
-    while (monthlyIterator.isBefore(toDate)) {
+    while (monthlyIterator.isBefore(toDate) || monthlyIterator.isSame(toDate)) {
         const filePath = (process.env.WORKDIR as string);
-        const dbFile = filePath + (filePath.endsWith(path.sep) ? "" : path.sep) + ip + path.sep + monthlyIterator.format("YYYY-MM") + "-monthly.sqlite";
+        const dbFile = path.join(filePath, ip, monthlyIterator.format("YYYY-MM") + "-monthly.sqlite");
         if (fs.existsSync(dbFile)) {
             const db = new Database(dbFile);
             try {
@@ -181,37 +181,17 @@ async function getMeasurementsFromDBs(fromDate: moment.Moment, toDate: moment.Mo
         monthlyIterator.add(1, "months");
     }
 
-    if (result.length > 0) {
-        const lastRecordedTime = result[result.length - 1].recorded_time;
-        let nextHour = moment.unix(lastRecordedTime);
-        nextHour.add(1, "hour");
-        const filePath = (process.env.WORKDIR as string);
-        const dbFile = filePath + (filePath.endsWith(path.sep) ? "" : path.sep) + ip + path.sep + nextHour.format("YYYY-MM") + "-monthly.sqlite";
-        if (fs.existsSync(dbFile)) {
-            const db = new Database(dbFile);
-            try {
-                const firstRecords = await DBUtils.runQuery(db, "SELECT min(id) as id, channel, measured_value, recorded_time FROM measurements where recorded_time > ? group by channel", [lastRecordedTime]);
-                firstRecords.forEach((element: any) => {
-                    result.push(element);
-                })
-            } catch (err) {
-                console.error(moment().format(), err);
-            } finally {
-                db.close();
-            }
-        }
-    }
     return result;
 }
 
 async function archiveLastYear(dbFilesPath: string, archiveRelativeFilePath: string, lastYear: moment.Moment) {
     const year = lastYear.year();
-    const outPath = dbFilesPath + path.sep + archiveRelativeFilePath;
+    const outPath = path.join(dbFilesPath, archiveRelativeFilePath);
     if (!fs.existsSync(outPath)) {
         fs.mkdirSync(outPath, { recursive: true });
         console.log(moment().format(), `Directory '${outPath}' created.`);
     }
-    await compressFiles(year, dbFilesPath, outPath + path.sep + `${year}.tgz`);
+    await compressFiles(year, dbFilesPath, path.join(outPath, `${year}.tgz`));
 }
 
 function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.Moment) {
@@ -222,7 +202,7 @@ function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.Moment)
             let monthlyIterator = moment(momentLastYear);
             for (let idx = 0; idx < 12; idx++) {
                 const fileName = monthlyIterator.format("YYYY-MM") + '-monthly.sqlite';
-                const dbFileName = dbFilePath + path.sep + fileName;
+                const dbFileName = path.join(dbFilePath, fileName);
                 fs.rmSync(dbFileName);
                 monthlyIterator.add(1, "months");
             }
