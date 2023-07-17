@@ -158,7 +158,7 @@ async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Mo
     return result;
 }
 async function getMeasurementsFromDBs(fromDate: moment.Moment, toDate: moment.Moment, ip: string): Promise<any[]> {
-    let monthlyIterator = moment(fromDate);
+    let monthlyIterator = moment(fromDate).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0);
     let result: any[] = [];
     while (monthlyIterator.isBefore(toDate) || monthlyIterator.isSame(toDate)) {
         const filePath = (process.env.WORKDIR as string);
@@ -215,16 +215,20 @@ function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.Moment)
 function getMeasurementsFromEnergyMeter(energymeter: any, channels: any) {
     let response = '';
     const client = new Net.Socket();
+    client.setTimeout(5000);
     try {
         client.connect({ port: energymeter.port, host: energymeter.ip_address }, () => {
             console.log(moment().format(), energymeter.ip_address, `TCP connection established with the server.`);
             client.write('read all');
         });
     } catch (err) {
-        console.error(moment().format(), err);
+        console.error(moment().format(), energymeter.ip_address, err);
     }
+    client.on('timeout', function () {
+        console.error(moment().format(), energymeter.ip_address, "Connection timeout");
+    });
     client.on('error', function (err) {
-        console.error(moment().format(), err);
+        console.error(moment().format(), energymeter.ip_address, err);
     });
     client.on('data', function (chunk) {
         response += chunk;
