@@ -28,6 +28,7 @@
     "@types/node": "^20.1.1",
     "dotenv": "^16.2.0",
     "moment": "^2.29.4",
+    "moment-timezone": "^0.5.43",
     "node-cron": "^3.0.2",
     "nodemon": "^2.0.22",
     "sqlite3": "^5.1.6",

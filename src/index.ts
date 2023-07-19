@@ -1,4 +1,4 @@
-import moment from 'moment';
+import moment, { MomentTimezone } from 'moment-timezone';
 import Net from 'net';
 import cron from 'node-cron';
 import { Database } from 'sqlite3';
@@ -38,7 +38,7 @@ cron.schedule(process.env.YEARLY_CRONTAB as string, () => {
         try {
             console.log(moment().format(), "Monthly aggregation started");
             let configDB = new Database(process.env.CONFIG_DB_FILE_NAME as string, sqlite3.OPEN_READONLY);
-            configDB.all('SELECT * FROM energy_meter where enabled=1', (err, rows) => {
+            configDB.all('SELECT * FROM energy_meter where enabled=1', async (err, rows) => {
                 if (err) {
                     console.log(moment().format(), `Error at selection: ${err}`);
                 } else
@@ -88,7 +88,7 @@ function processAggregation(rows: unknown[]) {
         let momentLastYear = moment().add(-1, "year");
         let aggregatedDb: Database | undefined = await DBUtils.getMeasurementsDB(row.ip_address, momentLastYear.format("YYYY") + '-yearly.sqlite', true);
         if (aggregatedDb) {
-            aggregateDataLastYear(row.ip_address, aggregatedDb, momentLastYear).then(() => {
+            aggregateDataLastYear(row.ip_address, row.time_zone, aggregatedDb, momentLastYear).then(() => {
                 aggregatedDb?.close();
             }).catch((err) => {
                 console.error(moment().format(), row.ip_address, err);
@@ -100,17 +100,17 @@ function processAggregation(rows: unknown[]) {
     });
 }
 
-async function aggregateDataLastYear(IPAddess: string, aggregatedDb: Database, momentLastYear: moment.Moment) {
-    let firstDay = moment(momentLastYear).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0).set("millisecond", 0);
+async function aggregateDataLastYear(IPAddess: string, timeZone: string, aggregatedDb: Database, momentLastYear: moment.Moment) {
+    let firstDay = moment(momentLastYear).set("month", 0).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0).set("millisecond", 0);
     let lastDay = moment(firstDay).add(1, "year");
-    const lastRecords: any[] = await getMonthlyMeasurements(firstDay, lastDay, IPAddess);
+    const lastRecords: any[] = await getMonthlyMeasurements(firstDay, lastDay, IPAddess, timeZone);
     lastRecords.forEach(async (lastRec: any) => {
         await DBUtils.runQuery(aggregatedDb, "INSERT INTO Measurements (channel, measured_value, recorded_time) VALUES (?,?,?)", [lastRec.channel, lastRec.measured_value, lastRec.recorded_time]);
     });
     cleanUpAggregatedFiles(IPAddess, momentLastYear);
 }
 
-async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Moment, ip: string): Promise<any[]> {
+async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Moment, ip: string, timeZone: string): Promise<any[]> {
     let measurements = await getMeasurementsFromDBs(fromDate, toDate, ip);
     let result: any[] = [];
     let prevElement: any = {};
@@ -121,8 +121,8 @@ async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Mo
             prevElement[element.channel] = { recorded_time: element.recorded_time, measured_value: element.measured_value, channel: element.channel, diff: 0 };
             result.push({ ...prevElement[element.channel] });
         } else {
-            const roundedPrevMonth = moment.unix(prevElement[element.channel].recorded_time).utc().set("date", 1).set("hour", 0).set("minute", 0).set("second", 0);
-            const roundedMonth = moment.unix(element.recorded_time).utc().set("date", 1).set("hour", 0).set("minute", 0).set("second", 0);
+            const roundedPrevMonth = moment.unix(prevElement[element.channel].recorded_time).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0).set("millisecond", 0).tz(timeZone);
+            const roundedMonth = moment.unix(element.recorded_time).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0).set("millisecond", 0).tz(timeZone);
             const diffMonths = roundedMonth.diff(roundedPrevMonth, "months");
             isMonthlyEnabled = diffMonths >= 1;
 
@@ -138,6 +138,7 @@ async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Mo
             lastElement[element.channel] = { recorded_time: element.recorded_time, measured_value: element.measured_value, channel: element.channel };
         }
     });
+
     if (!isMonthlyEnabled) {
         Object.keys(lastElement).forEach((key) => {
             try {
@@ -157,6 +158,7 @@ async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Mo
     }
     return result;
 }
+
 async function getMeasurementsFromDBs(fromDate: moment.Moment, toDate: moment.Moment, ip: string): Promise<any[]> {
     let monthlyIterator = moment(fromDate).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0);
     let result: any[] = [];
