@@ -7,7 +7,9 @@
     "build": "tsc",
     "dev": "nodemon",
     "test": "jest --coverage --runInBand --detectOpenHandles --forceExit",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "aggregate": "ts-node src/aggregate.ts",
+    "generate": "ts-node src/generate.ts"
   },
   "nodemonConfig": {
     "watch": [
