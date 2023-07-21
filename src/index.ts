@@ -14,47 +14,38 @@ dotenv.config({ path: path.resolve(__dirname, `../${process.env.NODE_ENV ? proce
 if (process.env.NODE_ENV === "docker" && !fs.existsSync(path.join(process.env.WORKDIR as string, "config.sqlite"))) {
     fs.copyFileSync(path.resolve(__dirname, "../config.sqlite"), path.join(process.env.WORKDIR as string, "config.sqlite"));
 }
-/*
-cron.schedule(process.env.YEARLY_ARCHIVE_CRONTAB as string, () => {
-    let configDB = new Database(process.env.CONFIG_DB_FILE_NAME as string, sqlite3.OPEN_READONLY);
-    const momentLastYear = moment().add(-12, "months");
-    configDB.all('SELECT * FROM energy_meter where enabled=1', (err, rows) => {
-        if (err) {
-            console.log(moment().format(), `Error at selection: ${err}`);
-        } else {
-            rows.forEach(async (row: any) => {
-                try {
-                    cleanUpAggregatedFiles(row.ip_address, momentLastYear);
-                } catch (err) {
-                    console.error(moment().format(), `Error at aggregation: ${err}`);
-                }
-            });
-        }
-    });
-})
-*/
 
 cron.schedule(process.env.YEARLY_CRONTAB as string, () => {
-    if (moment().month() == 0)
-        try {
-            console.log(moment().format(), "Monthly aggregation started");
-            let configDB = new Database(process.env.CONFIG_DB_FILE_NAME as string, sqlite3.OPEN_READONLY);
-            configDB.all('SELECT * FROM energy_meter where enabled=1', async (err, rows) => {
-                if (err) {
-                    console.log(moment().format(), `Error at selection: ${err}`);
-                } else
-                    try {
-                        processAggregation(rows);
-                    } catch (err) {
-                        console.log(moment().format(), `Error at aggregation: ${err}`);
-                    }
-            });
-        } catch (err) {
-            console.error(moment().format(), err);
-        }
+    let currentTime = moment();
+    if (currentTime.month() == 0) {
+        yearlyProcess(currentTime);
+    }
 });
 
 cron.schedule(process.env.HOURLY_CRONTAB as string, () => {
+    hourlyProcess(moment());
+})
+
+function yearlyProcess(currentTime: moment.Moment) {
+    try {
+        console.log(moment().format(), "Monthly aggregation started");
+        let configDB = new Database(process.env.CONFIG_DB_FILE_NAME as string, sqlite3.OPEN_READONLY);
+        configDB.all('SELECT * FROM energy_meter where enabled=1', async (err, rows) => {
+            if (err) {
+                console.log(moment().format(), `Error at selection: ${err}`);
+            } else
+                try {
+                    processAggregation(currentTime, rows);
+                } catch (err) {
+                    console.log(moment().format(), `Error at aggregation: ${err}`);
+                }
+        });
+    } catch (err) {
+        console.error(moment().format(), err);
+    }
+}
+
+function hourlyProcess(currentTime: moment.Moment) {
     try {
         let configDB = new Database(process.env.CONFIG_DB_FILE_NAME as string, sqlite3.OPEN_READONLY);
         configDB.all('SELECT * FROM energy_meter where enabled=1', (err, rows) => {
@@ -64,7 +55,7 @@ cron.schedule(process.env.HOURLY_CRONTAB as string, () => {
                 try {
                     rows.forEach(async (energymeter: any) => {
                         let channels = await getActiveChannels(configDB, energymeter.id);
-                        getMeasurementsFromEnergyMeter(energymeter, channels);
+                        DBUtils.getMeasurementsFromEnergyMeter(currentTime, energymeter, channels);
                     });
                 } catch (err) {
                     console.error(moment().format(), err);
@@ -73,8 +64,7 @@ cron.schedule(process.env.HOURLY_CRONTAB as string, () => {
     } catch (err) {
         console.error(moment().format(), err);
     }
-})
-
+}
 async function getActiveChannels(configDB: Database, energyMeterId: number): Promise<Array<String>> {
     let channelsResult: any[] = await DBUtils.runQuery(configDB, `SELECT channel FROM channels WHERE energy_meter_id = ? and enabled=1`, [energyMeterId]);
     let channels: Array<String> = new Array<String>();
@@ -84,9 +74,9 @@ async function getActiveChannels(configDB: Database, energyMeterId: number): Pro
     return channels;
 }
 
-function processAggregation(rows: unknown[]) {
+function processAggregation(currentTime: moment.Moment, rows: unknown[]) {
     rows.forEach(async (row: any) => {
-        let momentLastYear = moment().add(-1, "year");
+        let momentLastYear = currentTime.add(-1, "year");
         let aggregatedDb: Database | undefined = await DBUtils.getMeasurementsDB(row.ip_address, momentLastYear.format("YYYY") + '-yearly.sqlite', true);
         if (aggregatedDb) {
             aggregateDataLastYear(row.ip_address, row.time_zone, aggregatedDb, momentLastYear).then(() => {
@@ -213,60 +203,6 @@ function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.Moment)
     }).catch((err) => {
         console.log(moment().format(), IPAddess, err);
     })
-}
-
-function getMeasurementsFromEnergyMeter(energymeter: any, channels: any) {
-    let response = '';
-    const client = new Net.Socket();
-    client.setTimeout(5000);
-    try {
-        client.connect({ port: energymeter.port, host: energymeter.ip_address }, () => {
-            console.log(moment().format(), energymeter.ip_address, `TCP connection established with the server.`);
-            client.write('read all');
-        });
-    } catch (err) {
-        console.error(moment().format(), energymeter.ip_address, err);
-    }
-    client.on('timeout', function () {
-        console.error(moment().format(), energymeter.ip_address, "Connection timeout");
-    });
-    client.on('error', function (err) {
-        console.error(moment().format(), energymeter.ip_address, err);
-    });
-    client.on('data', function (chunk) {
-        response += chunk;
-        client.end();
-    });
-
-    client.on('end', async function () {
-        console.log(moment().format(), energymeter.ip_address, "Data received from the server.");
-        let db: Database | undefined = await DBUtils.getMeasurementsDB(energymeter.ip_address, moment().format("YYYY-MM") + '-monthly.sqlite', true);
-        if (!db) {
-            console.error(moment().format(), energymeter.ip_address, "No database exists.");
-            return;
-        }
-        try {
-            console.log(moment().format(), energymeter.ip_address, "Try lock DB.");
-            await DBUtils.runQuery(db, "BEGIN EXCLUSIVE", []);
-            DBUtils.processMeasurements(db, energymeter.ip_address, response, channels);
-        } catch (err) {
-            console.log(moment().format(), energymeter.ip_address, `DB access error: ${err}`);
-        }
-        finally {
-            try {
-                await DBUtils.runQuery(db, "COMMIT", []);
-            } catch (err) {
-                console.log(moment().format(), energymeter.ip_address, `Commit transaction error: ${err}`);
-            }
-            console.log(moment().format(), energymeter.ip_address, 'Closing DB connection...');
-            db.close();
-            console.log(moment().format(), energymeter.ip_address, 'DB connection closed.');
-            console.log(moment().format(), energymeter.ip_address, 'Closing TCP connection...');
-            client.destroy();
-            console.log(moment().format(), energymeter.ip_address, 'TCP connection destroyed.');
-        }
-
-    });
 }
 
 function compressFiles(year: number, dbFilesPath: string, destination: string): Promise<any> {
