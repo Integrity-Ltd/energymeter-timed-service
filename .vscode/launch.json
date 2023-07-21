@@ -4,11 +4,18 @@
     // További információért látogassa meg a következőt: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-    {
+        {
             "command": "npm run dev",
             "name": "Run npm dev",
             "request": "launch",
             "type": "node-terminal"
+        },
+        {
+            "command": "npm run test",
+            "name": "Run npm test",
+            "request": "launch",
+            "type": "node-terminal"
         }
+
     ]
 }
