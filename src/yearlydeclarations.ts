@@ -27,8 +27,8 @@ async function yearlyProcess(currentTime: moment.Moment): Promise<boolean> {
 }
 
 async function processAggregation(currentTime: moment.Moment, rows: any[]) {
+    let momentLastYear = currentTime.add(-1, "year");
     for (const row of rows) {
-        let momentLastYear = currentTime.add(-1, "year");
         let aggregatedDb: Database | undefined = await DBUtils.getMeasurementsDB(row.ip_address, momentLastYear.format("YYYY") + '-yearly.sqlite', true);
         if (aggregatedDb) {
             try {
@@ -123,7 +123,9 @@ async function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.M
             for (let idx = 0; idx < 12; idx++) {
                 const fileName = monthlyIterator.format("YYYY-MM") + '-monthly.sqlite';
                 const dbFileName = path.join(dbFilePath, fileName);
-                fs.rmSync(dbFileName);
+                if (fs.existsSync(dbFileName)) {
+                    fs.rmSync(dbFileName);
+                }
                 monthlyIterator.add(1, "months");
             }
         }
