@@ -26,43 +26,18 @@ async function yearlyProcess(currentTime: moment.Moment): Promise<boolean> {
     return result;
 }
 
-async function hourlyProcess(currentTime: moment.Moment): Promise<boolean> {
-    let result = true;
-    try {
-        let configDB = new Database(process.env.CONFIG_DB_FILE_NAME as string, sqlite3.OPEN_READONLY);
-        let rows = await DBUtils.runQuery(configDB, 'SELECT * FROM energy_meter where enabled=1', []);
-        for (const energymeter of rows) {
-            try {
-                let channels = await getActiveChannels(configDB, energymeter.id);
-                DBUtils.getMeasurementsFromEnergyMeter(currentTime, energymeter, channels);
-            } catch (err) {
-                console.error(moment().format(), err);
-            }
-        };
-    } catch (err) {
-        console.error(moment().format(), err);
-    }
-    return result;
-}
-async function getActiveChannels(configDB: Database, energyMeterId: number): Promise<Array<String>> {
-    let channelsResult: any[] = await DBUtils.runQuery(configDB, `SELECT channel FROM channels WHERE energy_meter_id = ? and enabled=1`, [energyMeterId]);
-    let channels: Array<String> = new Array<String>();
-    channelsResult.map((ch) => {
-        channels.push(ch.channel.toString());
-    });
-    return channels;
-}
-
 async function processAggregation(currentTime: moment.Moment, rows: any[]) {
     for (const row of rows) {
         let momentLastYear = currentTime.add(-1, "year");
         let aggregatedDb: Database | undefined = await DBUtils.getMeasurementsDB(row.ip_address, momentLastYear.format("YYYY") + '-yearly.sqlite', true);
         if (aggregatedDb) {
-            aggregateDataLastYear(row.ip_address, row.time_zone, aggregatedDb, momentLastYear).catch((err) => {
+            try {
+                await aggregateDataLastYear(row.ip_address, row.time_zone, aggregatedDb, momentLastYear)
+            } catch (err) {
                 console.error(moment().format(), row.ip_address, err);
-            }).finally(() => {
-                aggregatedDb?.close()
-            });
+            } finally {
+                aggregatedDb.close()
+            }
         } else {
             console.log(moment().format(), row.ip_address, "Yearly aggregation database file not exists.");
         }
@@ -76,7 +51,7 @@ async function aggregateDataLastYear(IPAddess: string, timeZone: string, aggrega
     for await (const lastRec of lastRecords) {
         await DBUtils.runQuery(aggregatedDb, "INSERT INTO Measurements (channel, measured_value, recorded_time) VALUES (?,?,?)", [lastRec.channel, lastRec.measured_value, lastRec.recorded_time]);
     };
-    cleanUpAggregatedFiles(IPAddess, momentLastYear);
+    await cleanUpAggregatedFiles(IPAddess, momentLastYear);
 }
 
 async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Moment, ip: string, timeZone: string): Promise<any[]> {
@@ -128,6 +103,61 @@ async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Mo
     return result;
 }
 
+async function archiveLastYear(dbFilesPath: string, archiveRelativeFilePath: string, lastYear: moment.Moment) {
+    const year = lastYear.year();
+    const outPath = path.join(dbFilesPath, archiveRelativeFilePath);
+    if (!fs.existsSync(outPath)) {
+        fs.mkdirSync(outPath, { recursive: true });
+        console.log(moment().format(), `Directory '${outPath}' created.`);
+    }
+    await compressFiles(year, dbFilesPath, path.join(outPath, `${year}.zip`));
+}
+
+async function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.Moment) {
+    const dbFilePath = DBUtils.getDBFilePath(IPAddess);
+    const archiveRelativeFilePath = process.env.ARCHIVE_FILE_PATH as string;
+    try {
+        await archiveLastYear(dbFilePath, archiveRelativeFilePath, momentLastYear);
+        if ((process.env.DELETE_FILE_AFTER_AGGREGATION as string) == "true") {
+            let monthlyIterator = moment(momentLastYear);
+            for (let idx = 0; idx < 12; idx++) {
+                const fileName = monthlyIterator.format("YYYY-MM") + '-monthly.sqlite';
+                const dbFileName = path.join(dbFilePath, fileName);
+                fs.rmSync(dbFileName);
+                monthlyIterator.add(1, "months");
+            }
+        }
+    } catch (err) {
+        console.log(moment().format(), IPAddess, err);
+    }
+}
+
+function compressFiles(year: number, dbFilesPath: string, destination: string): Promise<any> {
+    return new Promise<any>((resolve, reject) => {
+        const pattern = `${year}-\\d+-monthly.sqlite$`;
+        const zip = new AdmZip();
+        try {
+            let files = fs.readdirSync(dbFilesPath)
+            files.forEach(function (file) {
+                const mresult = file.match(pattern);
+                if (mresult) {
+                    const fileName = path.join(dbFilesPath, file);
+                    if (fs.lstatSync(fileName).isFile()) {
+                        console.log(moment().format(), "added file to zip:", file);
+                        zip.addLocalFile(fileName);
+                    }
+                }
+            });
+            zip.writeZip(destination);
+            console.log(moment().format(), "Zip created:", destination)
+            resolve(true);
+        } catch (err) {
+            console.error(moment().format(), 'Unable to scan directory: ' + err);
+            reject(err);
+        }
+    });
+}
+
 async function getMeasurementsFromDBs(fromDate: moment.Moment, toDate: moment.Moment, ip: string): Promise<any[]> {
     let monthlyIterator = moment(fromDate).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0).set("millisecond", 0);
     let result: any[] = [];
@@ -151,63 +181,7 @@ async function getMeasurementsFromDBs(fromDate: moment.Moment, toDate: moment.Mo
         }
         monthlyIterator.add(1, "months");
     }
-
     return result;
 }
 
-async function archiveLastYear(dbFilesPath: string, archiveRelativeFilePath: string, lastYear: moment.Moment) {
-    const year = lastYear.year();
-    const outPath = path.join(dbFilesPath, archiveRelativeFilePath);
-    if (!fs.existsSync(outPath)) {
-        fs.mkdirSync(outPath, { recursive: true });
-        console.log(moment().format(), `Directory '${outPath}' created.`);
-    }
-    await compressFiles(year, dbFilesPath, path.join(outPath, `${year}.zip`));
-}
-
-function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.Moment) {
-    const dbFilePath = DBUtils.getDBFilePath(IPAddess);
-    const archiveRelativeFilePath = process.env.ARCHIVE_FILE_PATH as string;
-    archiveLastYear(dbFilePath, archiveRelativeFilePath, momentLastYear).then(() => {
-        if ((process.env.DELETE_FILE_AFTER_AGGREGATION as string) == "true") {
-            let monthlyIterator = moment(momentLastYear);
-            for (let idx = 0; idx < 12; idx++) {
-                const fileName = monthlyIterator.format("YYYY-MM") + '-monthly.sqlite';
-                const dbFileName = path.join(dbFilePath, fileName);
-                fs.rmSync(dbFileName);
-                monthlyIterator.add(1, "months");
-            }
-        }
-    }).catch((err) => {
-        console.log(moment().format(), IPAddess, err);
-    })
-}
-
-function compressFiles(year: number, dbFilesPath: string, destination: string): Promise<any> {
-    return new Promise<any>((resolve, reject) => {
-        const pattern = `${year}-\\d+-monthly.sqlite$`;
-        const zip = new AdmZip();
-
-        fs.readdir(dbFilesPath, function (err, files) {
-            if (err) {
-                console.error(moment().format(), 'Unable to scan directory: ' + err);
-                reject(err);
-            }
-            files.forEach(function (file) {
-                const mresult = file.match(pattern);
-                if (mresult) {
-                    const fileName = path.join(dbFilesPath, file);
-                    if (fs.lstatSync(fileName).isFile()) {
-                        console.log(moment().format(), "added file to zip:", file);
-                        zip.addLocalFile(fileName);
-                    }
-                }
-            });
-            zip.writeZip(destination);
-            console.log(moment().format(), "Zip created:", destination)
-            resolve(true);
-        });
-    });
-}
-
-export default { yearlyProcess, hourlyProcess };
+export default yearlyProcess;

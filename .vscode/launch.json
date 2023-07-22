@@ -1,7 +1,4 @@
 {
-    // IntelliSense használata a lehetséges attribútumok listázásához
-    // Húzza fölé az egeret a létező attribútumok leírásának megtekintéséhez!
-    // További információért látogassa meg a következőt: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
         {
@@ -13,18 +10,6 @@
         {
             "command": "npm run test",
             "name": "Run npm test",
-            "request": "launch",
-            "type": "node-terminal"
-        },
-        {
-            "command": "npm run aggregate",
-            "name": "Run npm aggregate",
-            "request": "launch",
-            "type": "node-terminal"
-        },
-        {
-            "command": "npm run generate",
-            "name": "Run npm generate",
             "request": "launch",
             "type": "node-terminal"
         }
