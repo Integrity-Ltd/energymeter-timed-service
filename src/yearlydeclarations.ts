@@ -27,7 +27,7 @@ async function yearlyProcess(currentTime: moment.Moment): Promise<boolean> {
 }
 
 async function processAggregation(currentTime: moment.Moment, rows: any[]) {
-    let momentLastYear = currentTime.add(-1, "year");
+    let momentLastYear = moment(currentTime).add(-1, "year");
     for (const row of rows) {
         let aggregatedDb: Database | undefined = await DBUtils.getMeasurementsDB(row.ip_address, momentLastYear.format("YYYY") + '-yearly.sqlite', true);
         if (aggregatedDb) {
