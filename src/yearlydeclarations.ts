@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import DBUtils from "../../energymeter-utils/src/utils/DBUtils";
 import AdmZip from "adm-zip";
+import fileLog from "../../energymeter-utils/src/utils/LogUtils";
 
 async function yearlyProcess(currentTime: moment.Moment): Promise<boolean> {
     let result = true;
@@ -65,8 +66,8 @@ async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Mo
             prevElement[element.channel] = { recorded_time: element.recorded_time, measured_value: element.measured_value, channel: element.channel, diff: 0 };
             result.push({ ...prevElement[element.channel] });
         } else {
-            const roundedPrevMonth = moment.unix(prevElement[element.channel].recorded_time).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0).set("millisecond", 0).tz(timeZone);
-            const roundedMonth = moment.unix(element.recorded_time).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0).set("millisecond", 0).tz(timeZone);
+            const roundedPrevMonth = moment.unix(prevElement[element.channel].recorded_time).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0).set("millisecond", 0);
+            const roundedMonth = moment.unix(element.recorded_time).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0).set("millisecond", 0);
             const diffMonths = roundedMonth.diff(roundedPrevMonth, "months");
             isMonthlyEnabled = diffMonths >= 1;
 
@@ -77,7 +78,7 @@ async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Mo
                     channel: element.channel,
                 };
                 result.push({ ...prevElement[element.channel] });
-                console.log("Monthly measurement at ", moment.unix(prevElement[element.channel].recorded_time).format())
+                //fileLog("measurements.log", "ch(" + String(element.channel).padStart(2, '0') + "): " + moment.unix(prevElement[element.channel].recorded_time).tz(timeZone).format() + "\n")
             }
 
             lastElement[element.channel] = { recorded_time: element.recorded_time, measured_value: element.measured_value, channel: element.channel };
@@ -85,6 +86,7 @@ async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Mo
     });
 
     if (!isMonthlyEnabled) {
+        //fileLog("measurements.log", "===========================");
         Object.keys(lastElement).forEach((key) => {
             try {
                 const diff = lastElement[key].measured_value - prevElement[lastElement[key].channel].measured_value;
@@ -95,6 +97,7 @@ async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Mo
                 };
                 if (diff != 0) {
                     result.push({ ...prevElement[lastElement[key].channel] });
+                    //fileLog("measurements.log", "ch(" + String(lastElement[key].channel).padStart(2, '0') + "): " + moment.unix(prevElement[lastElement[key].channel].recorded_time).tz(timeZone).format() + "\n")
                 }
             } catch (err) {
                 console.error(moment().format(), err);
