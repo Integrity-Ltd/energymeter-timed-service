@@ -55,7 +55,7 @@ async function aggregateDataLastYear(IPAddess: string, timeZone: string, aggrega
 }
 
 async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Moment, ip: string, timeZone: string): Promise<any[]> {
-    let measurements = await getMeasurementsFromDBs(fromDate, toDate, ip);
+    let measurements = await DBUtils.getMeasurementsFromDBs(fromDate, toDate, ip);
     let result: any[] = [];
     let prevElement: any = {};
     let lastElement: any = {};
@@ -77,6 +77,7 @@ async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Mo
                     channel: element.channel,
                 };
                 result.push({ ...prevElement[element.channel] });
+                console.log("Monthly measurement at ", moment.unix(prevElement[element.channel].recorded_time).format())
             }
 
             lastElement[element.channel] = { recorded_time: element.recorded_time, measured_value: element.measured_value, channel: element.channel };
@@ -158,32 +159,6 @@ function compressFiles(year: number, dbFilesPath: string, destination: string): 
             reject(err);
         }
     });
-}
-
-async function getMeasurementsFromDBs(fromDate: moment.Moment, toDate: moment.Moment, ip: string): Promise<any[]> {
-    let monthlyIterator = moment(fromDate).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0).set("millisecond", 0);
-    let result: any[] = [];
-    while (monthlyIterator.isBefore(toDate) || monthlyIterator.isSame(toDate)) {
-        const filePath = (process.env.WORKDIR as string);
-        const dbFile = path.join(filePath, ip, monthlyIterator.format("YYYY-MM") + "-monthly.sqlite");
-        if (fs.existsSync(dbFile)) {
-            const db = new Database(dbFile);
-            try {
-                const fromSec = fromDate.unix();
-                const toSec = toDate.unix();
-                let measurements = await DBUtils.runQuery(db, "select * from measurements where recorded_time between ? and ? order by recorded_time, channel", [fromSec, toSec]);
-                measurements.forEach((element: any) => {
-                    result.push(element);
-                })
-            } catch (err) {
-                console.error(moment().format(), err);
-            } finally {
-                db.close();
-            }
-        }
-        monthlyIterator.add(1, "months");
-    }
-    return result;
 }
 
 export default yearlyProcess;
