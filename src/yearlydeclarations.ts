@@ -46,65 +46,15 @@ async function processAggregation(currentTime: moment.Moment, rows: any[]) {
 }
 
 async function aggregateDataLastYear(IPAddess: string, timeZone: string, aggregatedDb: Database, momentLastYear: moment.Moment) {
-    let firstDay = moment(momentLastYear).set("month", 0).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0).set("millisecond", 0);
-    let lastDay = moment(firstDay).add(1, "year");
-    const lastRecords: any[] = await getMonthlyMeasurements(firstDay, lastDay, IPAddess, timeZone);
-    for await (const lastRec of lastRecords) {
+    const fromDate = moment.tz(momentLastYear.get("year") + "-01-01", "YYYY-MM-DD", timeZone);
+    const toDate = moment.tz((momentLastYear.get("year") + 1) + "-01-01", "YYYY-MM-DD", timeZone);
+
+    const measurements: any[] = await DBUtils.getMeasurementsFromDBs(fromDate, toDate, IPAddess);
+    const monthlyRecords: any[] = DBUtils.getDetails(measurements, timeZone, 'monthly', true);
+    for await (const lastRec of monthlyRecords) {
         await DBUtils.runQuery(aggregatedDb, "INSERT INTO Measurements (channel, measured_value, recorded_time) VALUES (?,?,?)", [lastRec.channel, lastRec.measured_value, lastRec.recorded_time]);
     };
     await cleanUpAggregatedFiles(IPAddess, momentLastYear);
-}
-
-async function getMonthlyMeasurements(fromDate: moment.Moment, toDate: moment.Moment, ip: string, timeZone: string): Promise<any[]> {
-    let measurements = await DBUtils.getMeasurementsFromDBs(fromDate, toDate, ip);
-    let result: any[] = [];
-    let prevElement: any = {};
-    let lastElement: any = {};
-    let isMonthlyEnabled = false;
-    measurements.forEach((element: any, idx: number) => {
-        if (prevElement[element.channel] == undefined) {
-            prevElement[element.channel] = { recorded_time: element.recorded_time, measured_value: element.measured_value, channel: element.channel, diff: 0 };
-            result.push({ ...prevElement[element.channel] });
-        } else {
-            const roundedPrevMonth = moment.unix(prevElement[element.channel].recorded_time).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0).set("millisecond", 0);
-            const roundedMonth = moment.unix(element.recorded_time).set("date", 1).set("hour", 0).set("minute", 0).set("second", 0).set("millisecond", 0);
-            const diffMonths = roundedMonth.diff(roundedPrevMonth, "months");
-            isMonthlyEnabled = diffMonths >= 1;
-
-            if (isMonthlyEnabled) {
-                prevElement[element.channel] = {
-                    recorded_time: element.recorded_time,
-                    measured_value: element.measured_value,
-                    channel: element.channel,
-                };
-                result.push({ ...prevElement[element.channel] });
-                //fileLog("measurements.log", "ch(" + String(element.channel).padStart(2, '0') + "): " + moment.unix(prevElement[element.channel].recorded_time).tz(timeZone).format() + "\n")
-            }
-
-            lastElement[element.channel] = { recorded_time: element.recorded_time, measured_value: element.measured_value, channel: element.channel };
-        }
-    });
-
-    if (!isMonthlyEnabled) {
-        //fileLog("measurements.log", "===========================");
-        Object.keys(lastElement).forEach((key) => {
-            try {
-                const diff = lastElement[key].measured_value - prevElement[lastElement[key].channel].measured_value;
-                prevElement[lastElement[key].channel] = {
-                    recorded_time: lastElement[key].recorded_time,
-                    measured_value: lastElement[key].measured_value,
-                    channel: lastElement[key].channel
-                };
-                if (diff != 0) {
-                    result.push({ ...prevElement[lastElement[key].channel] });
-                    //fileLog("measurements.log", "ch(" + String(lastElement[key].channel).padStart(2, '0') + "): " + moment.unix(prevElement[lastElement[key].channel].recorded_time).tz(timeZone).format() + "\n")
-                }
-            } catch (err) {
-                console.error(moment().format(), err);
-            }
-        });
-    }
-    return result;
 }
 
 async function archiveLastYear(dbFilesPath: string, archiveRelativeFilePath: string, lastYear: moment.Moment) {

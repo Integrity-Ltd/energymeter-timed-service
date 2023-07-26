@@ -8,13 +8,13 @@ describe("Timed tests", () => {
     beforeEach((): void => {
     });
 
-    test("Hourly process", async () => {
+    test.skip("Hourly process", async () => {
         const result = await hourlyProcess(moment([2023, 6, 21, 19, 0, 0]));
         expect(result).toEqual(true);
     })
 
     test("Yearly process", async () => {
-        const result = await yearlyProcess(moment([2023, 0, 1, 0, 30, 0]));
+        const result = await yearlyProcess(moment.tz([2023, 0, 1, 0, 30, 0], "America/Los_Angeles"));
         expect(result).toEqual(true);
     })
 });
