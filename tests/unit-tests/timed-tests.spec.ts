@@ -14,7 +14,7 @@ describe("Timed tests", () => {
     })
 
     test("Yearly process", async () => {
-        const result = await yearlyProcess(moment.tz([2023, 0, 1, 0, 30, 0], "America/Los_Angeles"));
+        const result = await yearlyProcess(moment([2023, 0, 1, 0, 30, 0]));
         expect(result).toEqual(true);
     })
 });
