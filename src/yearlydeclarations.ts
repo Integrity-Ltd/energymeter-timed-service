@@ -80,7 +80,7 @@ async function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.M
                 if (fs.existsSync(dbFileName)) {
                     fs.rmSync(dbFileName);
                 }
-                monthlyIterator.add(1, "months");
+                monthlyIterator = monthlyIterator.add(1, "months");
             }
         }
     } catch (err) {
