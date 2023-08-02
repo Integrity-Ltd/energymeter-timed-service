@@ -7,7 +7,13 @@ import DBUtils from "../../energymeter-utils/src/utils/DBUtils";
 import AdmZip from "adm-zip";
 //import fileLog from "../../energymeter-utils/src/utils/LogUtils";
 
-async function yearlyProcess(currentTime: moment.Moment): Promise<boolean> {
+/**
+ * Do the aggregation process
+ * 
+ * @param currentTime start time of yearly aggregation
+ * @returns true if process successfully done
+ */
+export async function yearlyProcess(currentTime: moment.Moment): Promise<boolean> {
     let result = true;
     try {
         console.log(moment().format(), "Monthly aggregation started");
@@ -27,6 +33,12 @@ async function yearlyProcess(currentTime: moment.Moment): Promise<boolean> {
     return result;
 }
 
+/**
+ * Aggregation process by powermeters
+ * 
+ * @param currentTime time of aggregation process
+ * @param rows records of powermeter configurations
+ */
 async function processAggregation(currentTime: moment.Moment, rows: any[]) {
     let momentLastYear = moment(currentTime).add(-1, "year");
     for (const row of rows) {
@@ -45,6 +57,13 @@ async function processAggregation(currentTime: moment.Moment, rows: any[]) {
     };
 }
 
+/**
+ * Last year aggregation
+ * @param IPAddess IP address of powermeter
+ * @param timeZone Timezone of powermeter
+ * @param aggregatedDb Created yearly aggregation database
+ * @param momentLastYear The year of aggregation
+ */
 async function aggregateDataLastYear(IPAddess: string, timeZone: string, aggregatedDb: Database, momentLastYear: moment.Moment) {
     const fromDate = moment.tz(momentLastYear.get("year") + "-01-01", "YYYY-MM-DD", timeZone);
     const toDate = moment.tz((momentLastYear.get("year") + 1) + "-01-01", "YYYY-MM-DD", timeZone);
@@ -67,6 +86,11 @@ async function archiveLastYear(dbFilesPath: string, archiveRelativeFilePath: str
     await compressFiles(year, dbFilesPath, path.join(outPath, `${year}.zip`));
 }
 
+/**
+ * Archive and remove last year of datas
+ * @param IPAddess IP address of powermeter
+ * @param momentLastYear last year of aggregation for search SQLite files
+ */
 async function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.Moment) {
     const dbFilePath = DBUtils.getDBFilePath(IPAddess);
     const archiveRelativeFilePath = process.env.ARCHIVE_FILE_PATH as string;
@@ -88,6 +112,13 @@ async function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.M
     }
 }
 
+/**
+ * 
+ * @param year year part of monthly SQLite file
+ * @param dbFilesPath the SQLite files path that will be compressed
+ * @param destination the compressed file name with path
+ * @returns true if compression succesfully done
+ */
 function compressFiles(year: number, dbFilesPath: string, destination: string): Promise<any> {
     return new Promise<any>((resolve, reject) => {
         const pattern = `${year}-\\d+-monthly.sqlite$`;
@@ -113,5 +144,3 @@ function compressFiles(year: number, dbFilesPath: string, destination: string): 
         }
     });
 }
-
-export default yearlyProcess;

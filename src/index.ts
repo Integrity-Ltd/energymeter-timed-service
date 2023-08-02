@@ -3,8 +3,8 @@ import cron from 'node-cron';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import path from 'path';
-import hourlyProcess from './hourlydeclarations';
-import yearlyProcess from './yearlydeclarations';
+import { hourlyProcess } from './hourlydeclarations';
+import { yearlyProcess } from './yearlydeclarations';
 
 dotenv.config({ path: path.resolve(__dirname, `../${process.env.NODE_ENV ? process.env.NODE_ENV as string : ""}.env`) });
 
