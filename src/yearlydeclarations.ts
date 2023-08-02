@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import DBUtils from "../../energymeter-utils/src/utils/DBUtils";
 import AdmZip from "adm-zip";
-import fileLog from "../../energymeter-utils/src/utils/LogUtils";
+//import fileLog from "../../energymeter-utils/src/utils/LogUtils";
 
 async function yearlyProcess(currentTime: moment.Moment): Promise<boolean> {
     let result = true;
