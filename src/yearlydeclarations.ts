@@ -1,4 +1,6 @@
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc'
+import timezone from 'dayjs/plugin/timezone'
 import { Database } from 'sqlite3';
 import sqlite3 from 'sqlite3';
 import fs from 'fs';
@@ -6,6 +8,9 @@ import path from 'path';
 import { runQuery, getDBFilePath, getMeasurementsDB, getMeasurementsFromDBs, getDetails } from "../../energymeter-utils/src/utils/DBUtils";
 import AdmZip from "adm-zip";
 //import fileLog from "../../energymeter-utils/src/utils/LogUtils";
+
+dayjs.extend(utc)
+dayjs.extend(timezone)
 
 /**
  * Do the aggregation process
@@ -65,14 +70,18 @@ async function processAggregation(currentTime: dayjs.Dayjs, rows: any[]) {
  * @param momentLastYear The year of aggregation
  */
 async function aggregateDataLastYear(IPAddess: string, timeZone: string, aggregatedDb: Database, momentLastYear: dayjs.Dayjs) {
-    const fromDate = dayjs.tz(momentLastYear.get("year") + "-01-01", "YYYY-MM-DD", timeZone);
-    const toDate = dayjs.tz((momentLastYear.get("year") + 1) + "-01-01", "YYYY-MM-DD", timeZone);
+    const from = momentLastYear.get("year") + "-01-01";
+    const fromDate = dayjs.tz(from, "YYYY-MM-DD", timeZone);
+    const to = (momentLastYear.get("year") + 1) + "-01-01";
+    const toDate = dayjs.tz(to, "YYYY-MM-DD", timeZone);
 
     const measurements: any[] = await getMeasurementsFromDBs(fromDate, toDate, IPAddess);
     const monthlyRecords: any[] = getDetails(measurements, timeZone, 'monthly', true);
+    runQuery(aggregatedDb, "BEGIN", []);
     for await (const lastRec of monthlyRecords) {
         await runQuery(aggregatedDb, "INSERT INTO Measurements (channel, measured_value, recorded_time) VALUES (?,?,?)", [lastRec.channel, lastRec.measured_value, lastRec.recorded_time]);
     };
+    runQuery(aggregatedDb, "COMMIT", []);
     await cleanUpAggregatedFiles(IPAddess, momentLastYear);
 }
 
