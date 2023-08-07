@@ -1,4 +1,4 @@
-import moment from 'moment-timezone';
+import dayjs from "dayjs";
 import cron from 'node-cron';
 import fs from 'fs';
 import dotenv from 'dotenv';
@@ -13,15 +13,15 @@ if (process.env.NODE_ENV === "docker" && !fs.existsSync(path.join(process.env.WO
 }
 
 cron.schedule(process.env.YEARLY_CRONTAB as string, () => {
-    let currentTime = moment();
+    let currentTime = dayjs();
     if (currentTime.month() == 0) {
         yearlyProcess(currentTime);
     }
 });
 
 cron.schedule(process.env.HOURLY_CRONTAB as string, () => {
-    hourlyProcess(moment());
+    hourlyProcess(dayjs());
 })
 
 
-console.log(moment().format(), 'Server started.');
+console.log(dayjs().format(), 'Server started.');
