@@ -203,49 +203,32 @@ async function getMeasurementsFromDBs(fromDate: moment.Moment, toDate: moment.Mo
     return result;
 }
 
-function archiveLastYear(dbFilesPath: string, archiveRelativeFilePath: string, lastYear: moment.Moment) {
+async function archiveLastYear(dbFilesPath: string, archiveRelativeFilePath: string, lastYear: moment.Moment) {
     const year = lastYear.year();
-    const pattern = `${year}-\\d+-monthly.sqlite$`;
     const outPath = dbFilesPath + path.sep + archiveRelativeFilePath;
     if (!fs.existsSync(outPath)) {
         fs.mkdirSync(outPath, { recursive: true });
         console.log(moment().format(), `Directory '${outPath}' created.`);
     }
-    targz.compress({
-        src: dbFilesPath,
-        dest: outPath + path.sep + `${year}.tgz`,
-        tar: {
-            ignore: function (name) {
-                const mresult = name.match(pattern);
-                return mresult == null || mresult.length == 0;
-            }
-        },
-        gz: {
-            level: 6,
-            memLevel: 6
-        }
-    }, function (err) {
-        if (err) {
-            console.error(err);
-        } else {
-            console.log(moment().format(), "Archive created.");
-        }
-    });
+    await compressFiles(year, dbFilesPath, outPath + path.sep + `${year}.tgz`);
 }
 
 function cleanUpAggregatedFiles(IPAddess: string, momentLastYear: moment.Moment) {
     const dbFilePath = DBUtils.getDBFilePath(IPAddess);
     const archiveRelativeFilePath = process.env.ARCHIVE_FILE_PATH as string;
-    archiveLastYear(dbFilePath, archiveRelativeFilePath, momentLastYear);
-    if ((process.env.DELETE_FILE_AFTER_AGGREGATION as string) == "true") {
-        let monthlyIterator = moment(momentLastYear);
-        for (let idx = 0; idx < 12; idx++) {
-            const fileName = monthlyIterator.format("YYYY-MM") + '-monthly.sqlite';
-            const dbFileName = dbFilePath + path.sep + fileName;
-            fs.rmSync(dbFileName);
-            monthlyIterator.add(1, "months");
+    archiveLastYear(dbFilePath, archiveRelativeFilePath, momentLastYear).then(() => {
+        if ((process.env.DELETE_FILE_AFTER_AGGREGATION as string) == "true") {
+            let monthlyIterator = moment(momentLastYear);
+            for (let idx = 0; idx < 12; idx++) {
+                const fileName = monthlyIterator.format("YYYY-MM") + '-monthly.sqlite';
+                const dbFileName = dbFilePath + path.sep + fileName;
+                fs.rmSync(dbFileName);
+                monthlyIterator.add(1, "months");
+            }
         }
-    }
+    }).catch((err) => {
+        console.log(moment().format(), IPAddess, err);
+    })
 }
 
 function getMeasurementsFromEnergyMeter(energymeter: any, channels: any) {
@@ -277,7 +260,7 @@ function getMeasurementsFromEnergyMeter(energymeter: any, channels: any) {
         try {
             console.log(moment().format(), energymeter.ip_address, "Try lock DB.");
             await DBUtils.runQuery(db, "BEGIN EXCLUSIVE", []);
-            DBUtils.processMeasurements(db, response, channels);
+            DBUtils.processMeasurements(db, energymeter.ip_address, response, channels);
         } catch (err) {
             console.log(moment().format(), energymeter.ip_address, `DB access error: ${err}`);
         }
@@ -295,6 +278,34 @@ function getMeasurementsFromEnergyMeter(energymeter: any, channels: any) {
             console.log(moment().format(), energymeter.ip_address, 'TCP connection destroyed.');
         }
 
+    });
+}
+
+function compressFiles(year: number, dbFilesPath: string, destination: string) {
+    const pattern = `${year}-\\d+-monthly.sqlite$`;
+    return new Promise<any>((resolve, reject) => {
+        targz.compress({
+            src: dbFilesPath,
+            dest: destination,
+            tar: {
+                ignore: function (name) {
+                    const mresult = name.match(pattern);
+                    return mresult == null || mresult.length == 0;
+                }
+            },
+            gz: {
+                level: 6,
+                memLevel: 6
+            }
+        }, function (err) {
+            if (err) {
+                console.error(err);
+                return reject(err);
+            } else {
+                console.log(moment().format(), "Archive created.");
+                return resolve(true);
+            }
+        });
     });
 }
 
